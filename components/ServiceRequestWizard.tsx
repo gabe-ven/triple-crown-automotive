@@ -43,20 +43,26 @@ export default function ServiceRequestWizard({ open, onClose }: { open: boolean;
   const reset = () => { setStep(1); setIssues([]); setCar({year:'',make:'',model:'',plate:''}); setFiles([]); setContact({name:'',phone:'',email:'',method:'phone',notes:'',date:'',time:''}); setTicket(''); setError(''); };
 
   const toggle = (id: string) => setIssues(c => c.includes(id) ? c.filter(x => x !== id) : [...c, id]);
-  const issueLabels = ISSUES.filter(o => issues.includes(o.id)).map(o => o.label);
 
   const submit = async () => {
     setSubmitting(true); setError('');
     try {
-      const res = await fetch('/api/tickets', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
-        customerName: contact.name, customerEmail: contact.email, customerPhone: contact.phone,
-        year: car.year, make: car.make, model: car.model, licensePlate: car.plate,
-        issues: issueLabels, notes: contact.notes, appointmentDate: contact.date, appointmentTime: contact.time,
+      const res = await fetch(`${process.env.NEXT_PUBLIC_DASHBOARD_API_URL}/api/tickets`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+        shop_id:        process.env.NEXT_PUBLIC_SHOP_ID,
+        customer_name:  contact.name,
+        customer_email: contact.email,
+        customer_phone: contact.phone,
+        license_plate:  car.plate || '',
+        car_make:       car.make,
+        car_model:      car.model,
+        car_year:       car.year,
+        issues,
+        notes:          contact.notes,
       })});
       const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Something went wrong.'); setSubmitting(false); return; }
-      setTicket(data.ticketId); setStep(5);
-    } catch { setError('Network error. Please try again.'); }
+      if (!res.ok) { setError(data.error || 'Something went wrong, please try again.'); setSubmitting(false); return; }
+      setTicket(data.ticket_number); setStep(5);
+    } catch { setError('Something went wrong, please try again.'); }
     setSubmitting(false);
   };
 

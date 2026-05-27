@@ -1,68 +1,66 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
-import { X, Car, MapPin, Phone, Clock } from "lucide-react";
-import type { TicketStatus } from "./AdminSection/types/admin";
+import { useState, useRef } from "react";
+import { X, Car, MapPin, Phone } from "lucide-react";
 
-type Phase = "lookup" | "loading" | "found" | "not_found";
-
-const STATUS_CONFIG: Record<TicketStatus, { label: string; message: string; step: number }> = {
-  received:   { label: "Received",   message: "We've got your vehicle on our schedule. We'll review it shortly and reach out with any questions.", step: 1 },
-  reviewing:  { label: "Reviewing",  message: "Our technician is reviewing your vehicle now. We'll have a diagnosis and estimate for you soon.", step: 2 },
-  in_repair:  { label: "In Repair",  message: "Your vehicle is in the bay — our team is actively working on it. We'll call when it's ready.", step: 3 },
-  ready:      { label: "Ready!",     message: "Your vehicle is ready for pickup! Stop by anytime during business hours.", step: 4 },
-  completed:  { label: "Completed",  message: "Service complete. Thank you for choosing Triple Crown Automotive!", step: 4 },
+const STATUS_MAP: Record<string, { label: string; message: string; step: number }> = {
+  new:       { label: "Received",   message: "We've got your vehicle on our schedule. We'll review it shortly and reach out with any questions.", step: 1 },
+  reviewing: { label: "Reviewing",  message: "Our technician is reviewing your vehicle now. We'll have a diagnosis and estimate for you soon.", step: 2 },
+  in_repair: { label: "In Repair",  message: "Your vehicle is in the bay — our team is actively working on it. We'll call when it's ready.", step: 3 },
+  ready:     { label: "Ready!",     message: "Your vehicle is ready for pickup! Stop by anytime during business hours.", step: 4 },
+  completed: { label: "Completed",  message: "Service complete. Thank you for choosing Triple Crown Automotive!", step: 4 },
 };
 
-const ACTIVE_STATUSES: TicketStatus[] = ["received", "reviewing", "in_repair", "ready"];
+const ACTIVE_STATUSES = ["new", "reviewing", "in_repair", "ready"];
 
 interface TicketResult {
-  id: string;
-  status: TicketStatus;
-  year: string;
-  make: string;
-  model: string;
-  licensePlate: string | null;
-  issues: string[];
-  assignedTo: string | null;
-  appointmentDate: string | null;
-  appointmentTime: string | null;
-  customerName: string;
+  ticket_number: string;
+  status: string;
+  notes?: string;
 }
+
+type Phase = "lookup" | "loading" | "found" | "not_found";
 
 export function TrackRepairModal({ onClose }: { onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>("lookup");
   const [ticketId, setTicketId] = useState("");
-  const [contact, setContact] = useState("");
+  const [phone, setPhone] = useState("");
   const [ticket, setTicket] = useState<TicketResult | null>(null);
   const [error, setError] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+  function buildParams(id: string, ph: string) {
+    return new URLSearchParams({
+      ticket_number: id.trim().toUpperCase(),
+      phone:         ph.trim(),
+      shop_id:       process.env.NEXT_PUBLIC_SHOP_ID ?? "triple-crown-automotive",
+    });
+  }
 
   async function lookup() {
-    if (!ticketId.trim() || !contact.trim()) { setError("Please enter your ticket ID and email or phone."); return; }
+    if (!ticketId.trim() || !phone.trim()) {
+      setError("Please enter your ticket number and phone.");
+      return;
+    }
     setError("");
     setPhase("loading");
     try {
-      const res = await fetch("/api/track", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticketId: ticketId.trim().toUpperCase(), contact: contact.trim() }),
-      });
-      const data = await res.json();
-      if (!data.found) { setPhase("not_found"); return; }
-      setTicket(data.ticket);
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_DASHBOARD_API_URL}/api/tickets/status?${buildParams(ticketId, phone)}`
+      );
+      const json = await res.json();
+      if (!res.ok) { setPhase("not_found"); return; }
+      const data: TicketResult = json.data ?? json;
+      setTicket(data);
       setPhase("found");
-      if (ACTIVE_STATUSES.includes(data.ticket.status)) {
+      if (ACTIVE_STATUSES.includes(data.status)) {
         pollRef.current = setInterval(async () => {
-          const r2 = await fetch("/api/track", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ticketId: ticketId.trim().toUpperCase(), contact: contact.trim() }),
-          });
-          const d2 = await r2.json();
-          if (d2.found) setTicket(d2.ticket);
+          try {
+            const r2 = await fetch(
+              `${process.env.NEXT_PUBLIC_DASHBOARD_API_URL}/api/tickets/status?${buildParams(ticketId, phone)}`
+            );
+            const d2 = await r2.json();
+            if (r2.ok) setTicket(d2.data ?? d2);
+          } catch { /* non-fatal poll failure */ }
         }, 20000);
       }
     } catch {
@@ -70,8 +68,15 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const config = ticket ? STATUS_CONFIG[ticket.status] : null;
-  const vehicleLabel = ticket ? [ticket.year, ticket.make, ticket.model].filter(Boolean).join(" ") : "";
+  function reset() {
+    setPhase("lookup");
+    setTicketId("");
+    setPhone("");
+    setTicket(null);
+    if (pollRef.current) clearInterval(pollRef.current);
+  }
+
+  const config = ticket ? (STATUS_MAP[ticket.status] ?? { label: ticket.status, message: "", step: 1 }) : null;
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -88,9 +93,9 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
         <div className="p-6">
           {phase === "lookup" && (
             <div className="space-y-4">
-              <p className="text-sm text-neutral-600">Enter your ticket ID (from your confirmation email) and your email or phone number.</p>
+              <p className="text-sm text-neutral-600">Enter your ticket number (from your confirmation email) and your phone number.</p>
               <div>
-                <label className="text-xs font-mono uppercase tracking-widest text-neutral-400 mb-1 block">Ticket ID</label>
+                <label className="text-xs font-mono uppercase tracking-widest text-neutral-400 mb-1 block">Ticket Number</label>
                 <input
                   value={ticketId}
                   onChange={(e) => setTicketId(e.target.value.toUpperCase())}
@@ -99,11 +104,12 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
                 />
               </div>
               <div>
-                <label className="text-xs font-mono uppercase tracking-widest text-neutral-400 mb-1 block">Email or Last 7 Digits of Phone</label>
+                <label className="text-xs font-mono uppercase tracking-widest text-neutral-400 mb-1 block">Phone</label>
                 <input
-                  value={contact}
-                  onChange={(e) => setContact(e.target.value)}
-                  placeholder="you@email.com or 6626995"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="(530) 555-0100"
                   className="w-full px-4 py-3 border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0D5C3A]/40"
                 />
               </div>
@@ -127,9 +133,9 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
               <div className="text-center py-6">
                 <div className="text-4xl mb-3">🔍</div>
                 <div className="font-bold mb-2">Ticket Not Found</div>
-                <p className="text-sm text-neutral-500">We couldn&apos;t find a ticket matching that ID and contact info. Please double-check your confirmation email.</p>
+                <p className="text-sm text-neutral-500">We couldn&apos;t find a ticket matching that number and phone. Please double-check your confirmation email.</p>
               </div>
-              <button onClick={() => { setPhase("lookup"); setTicketId(""); setContact(""); }}
+              <button onClick={reset}
                 className="w-full py-3 border border-neutral-200 text-sm font-semibold rounded-lg hover:bg-neutral-50 transition-colors">
                 Try Again
               </button>
@@ -141,6 +147,12 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
 
           {phase === "found" && ticket && config && (
             <div className="space-y-5">
+              {/* Ticket number */}
+              <div className="flex items-center gap-3 text-sm">
+                <Car className="w-4 h-4 text-neutral-400 flex-shrink-0" />
+                <div className="font-mono font-semibold tracking-wide">{ticket.ticket_number}</div>
+              </div>
+
               {/* Stepper */}
               <div className="flex items-center gap-1">
                 {["Received", "Reviewing", "In Repair", "Ready"].map((step, i) => {
@@ -170,41 +182,11 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
                 <p className="text-sm text-neutral-600">{config.message}</p>
               </div>
 
-              {/* Vehicle */}
-              <div className="flex items-center gap-3 text-sm">
-                <Car className="w-4 h-4 text-neutral-400 flex-shrink-0" />
-                <div>
-                  <div className="font-semibold">{vehicleLabel}</div>
-                  {ticket.licensePlate && <div className="text-xs text-neutral-400 font-mono">Plate: {ticket.licensePlate}</div>}
-                </div>
-              </div>
-
-              {/* Issues */}
-              {ticket.issues.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {ticket.issues.map((issue) => (
-                    <span key={issue} className={`px-2 py-1 rounded text-xs font-mono ${
-                      config.step >= 3 ? "bg-[#0D5C3A]/10 text-[#0D5C3A]" : "bg-neutral-100 text-neutral-600"
-                    }`}>{issue}</span>
-                  ))}
-                </div>
-              )}
-
-              {/* Tech + appointment */}
-              {(ticket.assignedTo || ticket.appointmentDate) && (
-                <div className="space-y-1.5 text-sm">
-                  {ticket.assignedTo && (
-                    <div className="flex items-center gap-2 text-neutral-600">
-                      <span className="text-xs font-mono uppercase tracking-widest text-neutral-400">Tech:</span>
-                      {ticket.assignedTo}
-                    </div>
-                  )}
-                  {ticket.appointmentDate && (
-                    <div className="flex items-center gap-2 text-neutral-600">
-                      <Clock className="w-3.5 h-3.5 text-neutral-400" />
-                      {ticket.appointmentDate} {ticket.appointmentTime && `at ${ticket.appointmentTime}`}
-                    </div>
-                  )}
+              {/* Shop note */}
+              {ticket.notes && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+                  <div className="font-semibold mb-1 text-xs uppercase tracking-widest font-mono">Note from the shop</div>
+                  {ticket.notes}
                 </div>
               )}
 
@@ -216,7 +198,7 @@ export function TrackRepairModal({ onClose }: { onClose: () => void }) {
                 </div>
               </div>
 
-              <button onClick={() => { setPhase("lookup"); setTicket(null); if (pollRef.current) clearInterval(pollRef.current); }}
+              <button onClick={reset}
                 className="w-full py-2.5 border border-neutral-200 text-sm text-neutral-500 rounded-lg hover:bg-neutral-50 transition-colors font-mono">
                 Look Up Another Ticket
               </button>
